@@ -1423,14 +1423,8 @@ static int ac3_decode_frame(AVCodecContext * avctx, void *data,
     /* if consistent noise generation is enabled, seed the linear feedback generator
      * with the contents of the AC-3 frame so that the noise is identical across
      * decodes given the same AC-3 frame data, for use with non-linear edititing software. */
-    if (s->consistent_noise_generation) {
-        const AVCRC *avcrc = av_crc_get_table(AV_CRC_32_IEEE);
-
-        if (avcrc != NULL)
-            av_lfg_init(&s->dith_state, av_crc(avcrc, 0, s->input_buffer, FFMIN(buf_size, AC3_FRAME_BUFFER_SIZE)));
-        else
-            av_log(avctx, AV_LOG_ERROR, "CNG unable to seed from frame");
-    }
+    if (s->consistent_noise_generation)
+        av_lfg_init_from_data(&s->dith_state, s->input_buffer, FFMIN(buf_size, AC3_FRAME_BUFFER_SIZE));
 
     buf = s->input_buffer;
     /* initialize the GetBitContext with the start of valid AC-3 Frame */

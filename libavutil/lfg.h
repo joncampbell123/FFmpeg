@@ -29,6 +29,11 @@ typedef struct AVLFG {
 
 void av_lfg_init(AVLFG *c, unsigned int seed);
 
+/*
+ * Seed the state of the ALFG using binary data
+ */
+void av_lfg_init_from_data(AVLFG *c, const unsigned char *data, unsigned int length);
+
 /**
  * Get the next random unsigned 32-bit number using an ALFG.
  *
