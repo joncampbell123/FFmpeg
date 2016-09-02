@@ -63,7 +63,7 @@ void av_bmg_get(AVLFG *lfg, double out[2])
 void av_lfg_init_from_data(AVLFG *c, const unsigned char *data, unsigned int length) {
     unsigned int beg, end, segm;
     const AVCRC *avcrc;
-    uint32_t crc = 0;
+    uint32_t crc = 1;
 
     c->index = 0;
 
