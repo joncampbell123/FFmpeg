@@ -22,6 +22,8 @@
 #ifndef AVUTIL_LFG_H
 #define AVUTIL_LFG_H
 
+#include <stdint.h> /* uint8_t type */
+
 typedef struct AVLFG {
     unsigned int state[64];
     int index;
@@ -30,9 +32,11 @@ typedef struct AVLFG {
 void av_lfg_init(AVLFG *c, unsigned int seed);
 
 /*
- * Seed the state of the ALFG using binary data
+ * Seed the state of the ALFG using binary data.
+ *
+ * Return value: 0 on success, negative value (AVERROR) on failure.
  */
-void av_lfg_init_from_data(AVLFG *c, const unsigned char *data, unsigned int length);
+int av_lfg_init_from_data(AVLFG *c, const uint8_t *data, unsigned int length);
 
 /**
  * Get the next random unsigned 32-bit number using an ALFG.
