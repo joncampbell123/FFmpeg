@@ -66,11 +66,11 @@ int av_lfg_init_from_data(AVLFG *c, const uint8_t *data, unsigned int length) {
     const AVCRC *avcrc;
     uint32_t crc = 1;
 
-    c->index = 0;
-    avcrc = av_crc_get_table(AV_CRC_32_IEEE); /* This can't fail. It's a well-defined table in crc.c */
-
     /* avoid integer overflow in the loop below. */
     if (length > (UINT_MAX / 128U)) return AVERROR(EINVAL);
+
+    c->index = 0;
+    avcrc = av_crc_get_table(AV_CRC_32_IEEE); /* This can't fail. It's a well-defined table in crc.c */
 
     /* across 64 segments of the incoming data,
      * do a running crc of each segment and store the crc as the state for that slot.

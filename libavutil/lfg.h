@@ -22,7 +22,7 @@
 #ifndef AVUTIL_LFG_H
 #define AVUTIL_LFG_H
 
-#include <stdint.h> /* uint8_t type */
+#include <stdint.h>
 
 typedef struct AVLFG {
     unsigned int state[64];
