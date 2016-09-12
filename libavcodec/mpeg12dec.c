@@ -2266,6 +2266,7 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
          * for more information see: [https://en.wikipedia.org/wiki/EIA-608#DVD_GOP_User_Data_Insertion]
          *
          * uint32_t   user_data_start_code        0x000001B2    (big endian)
+         * -------------------- p[0] starts here ---------------------
          * uint16_t   user_identifier             0x4343 "CC"
          * uint8_t    user_data_type_code         0x01
          * uint8_t    caption_block_size          0xF8
@@ -2274,7 +2275,7 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
          *   bit 6    caption_filler              0
          *   bit 5:1  caption_block_count         number of caption blocks (pairs of caption words = frames). Most DVDs use 15 per start of GOP.
          *   bit 0    caption_extra_field_added   1=one additional caption word
-         *
+         * -------------------- p[5] starts here ---------------------
          * struct caption_field_block {
          *   uint8_t
          *     bit 7:1 caption_filler             0x7F (all 1s)
@@ -2288,30 +2289,48 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
          * Don't assume that the first caption word is the odd field. There do exist MPEG files in the wild that start
          * on the even field. There also exist DVDs in the wild that encode an odd field count and the
          * caption_extra_field_added/caption_odd_field_first bits change per packet to allow that. */
-        int cc_count = 0;
+        int caption_block_count = p[4] & 0x3F; /* you can treat bits 5:0 as number of fields */
+        int cc_count = 0; /* number of caption fields */
         int i;
-        // There is a caption count field in the data, but it is often
-        // incorrect.  So count the number of captions present.
-        for (i = 5; i + 6 <= buf_size && ((p[i] & 0xfe) == 0xfe); i += 6)
+
+        for (i = 5; cc_count < caption_block_count && (i + 3) <= buf_size; i += 3) {
+            if ((p[i] & 0xfe) != 0xfe) {
+                av_log(avctx, AV_LOG_DEBUG, "cc_count is too large (%u > %u) or junk data in DVD caption packet",(unsigned int)caption_block_count,(unsigned int)cc_count);
+                break;
+            }
+
             cc_count++;
+        }
+
         // Transform the DVD format into A53 Part 4 format
         if (cc_count > 0) {
             av_freep(&s1->a53_caption);
-            s1->a53_caption_size = cc_count * 6;
+            s1->a53_caption_size = cc_count * 3;
             s1->a53_caption      = av_malloc(s1->a53_caption_size);
             if (s1->a53_caption) {
-                uint8_t field1 = !!(p[4] & 0x80);
+                uint8_t field1 = (p[4] >> 7) & 1; /* caption_odd_field_first */
+                uint8_t pfield = 0xFF; /* DVDs that don't use the caption_field_odd bit always seem to leave it on */
                 uint8_t *cap = s1->a53_caption;
+
                 p += 5;
                 for (i = 0; i < cc_count; i++) {
-                    cap[0] = (p[0] == 0xff && field1) ? 0xfc : 0xfd;
+                    /* if the source actually uses the caption_odd_field bit, then use that to determine the field.
+                     * else, toggle between fields to keep track for DVDs where p[0] == 0xFF at all times. */
+                    if (p[0] != pfield)
+                        field1 = p[0] & 1; /* caption_field_odd */
+
+                    /* in A53 part 4, 0xFC = odd field, 0xFD = even field */
+                    cap[0] = field1 ? 0xFC : 0xFD;
                     cap[1] = p[1];
                     cap[2] = p[2];
-                    cap[3] = (p[3] == 0xff && !field1) ? 0xfc : 0xfd;
-                    cap[4] = p[4];
-                    cap[5] = p[5];
-                    cap += 6;
-                    p += 6;
+
+                    av_log(avctx, AV_LOG_DEBUG, "DVD CC field1=%u(%s) 0x%02x%02x prev=0x%02x cur=0x%02x\n",
+                        field1,field1?"odd":"even",cap[1],cap[2],pfield,p[0]);
+
+                    pfield = p[0];
+                    field1 ^= 1;
+                    cap += 3;
+                    p += 3;
                 }
             }
         }
