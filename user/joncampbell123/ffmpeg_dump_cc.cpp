@@ -90,6 +90,43 @@ bool do_video_decode_and_render(AVPacket &pkt) {
     int got_frame = 0;
 
     if (avcodec_decode_video2(input_avstream_video_codec_context,input_avstream_video_frame,&got_frame,&pkt) >= 0 && got_frame) {
+        /* we care about A53 caption data in this demo */
+        AVFrameSideData *a53 = av_frame_get_side_data(input_avstream_video_frame,AV_FRAME_DATA_A53_CC);
+
+        if (a53 != NULL) {
+            /* FFMPEG sends us the caption data in CEA-708 format even if it came from DVD captions (EIA-608) format.
+             * packet headers and CDP data are stripped, the data is a straight array of 708 3-byte data packets. */
+            unsigned int i;
+            unsigned int packets = a53->size / 3;
+            const unsigned char *scan = a53->data;
+
+            fprintf(stderr,"Caption data (%u bytes)\n",a53->size);
+            if (a53->size % 3)
+                fprintf(stderr,"A53 caption data warning, %u extra bytes\n",a53->size % 3);
+
+            if (a53->data == NULL) {
+                fprintf(stderr,"HEY! data==NULL\n");
+                abort();
+            }
+
+            scan = a53->data;
+            for (i=0;i < packets;i++,scan+=3) {
+                if (*scan >= 0xF8) {
+                    if (*scan >= 0xFE) {
+                        // DTVCC CEA 708 data
+                        printf("CEA-708 CC data 0x%02x%02x\n",scan[1],scan[2]);
+                    }
+                    else if (*scan >= 0xFC) {
+                        // EIA-608 CC data
+                        printf("EIA-608 CC data field=%u(%s) 0x%02x%02x\n",
+                            *scan & 1,(*scan & 1) ? "even" : "odd",scan[1],scan[2]);
+                    }
+                }
+                else {
+                    fprintf(stderr,"  ---aborting packet decode, junk data\n");
+                }
+            }
+        }
     }
 
     return (got_frame != 0);
