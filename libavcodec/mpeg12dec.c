@@ -2263,7 +2263,6 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
     } else if (buf_size >= 11 &&
                p[0] == 'C' && p[1] == 'C' && p[2] == 0x01 && p[3] == 0xf8) {
         /* extract DVD CC data
-         * for more information see: [https://en.wikipedia.org/wiki/EIA-608#DVD_GOP_User_Data_Insertion]
          *
          * uint32_t   user_data_start_code        0x000001B2    (big endian)
          * -------------------- p[0] starts here ---------------------
