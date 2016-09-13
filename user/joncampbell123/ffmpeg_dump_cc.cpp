@@ -218,6 +218,177 @@ static void on_608_cc(unsigned int ccword,bool evenfield) {
     }
 }
 
+unsigned char dtv708_data[1024];
+unsigned int dtv708_data_count = 0;
+unsigned int dtv708_xpos = 0;
+int dtv708_expect_seq = -1;
+
+void on_708_cc_data(unsigned char *s,unsigned int block_size) {
+    unsigned char *f = s + block_size;
+
+    if (verbose) {
+        unsigned char *t;
+
+        fprintf(stderr,"  Raw CC data: ");
+        for (t=s;t < f;t++) fprintf(stderr,"%02x ",*t);
+        fprintf(stderr,"\n");
+    }
+
+    // CEA-708-E text decoding.
+    // this is extremely simple sample code that happens to handle most captions just fine.
+    // this code might break if the commands cross a DTV service block boundary.
+    while (s < f) {
+        if (*s >= 0x80 && *s <= 0x9F) {
+            // control code
+            if (dtv708_xpos > 0) {
+                dtv708_xpos = 0;
+                fprintf(stdout,"\n");
+            }
+
+            if (*s >= 0x80 && *s <= 0x87) {
+                // SET CURRENT WINDOW
+            }
+            else if (*s == 0x88) {
+                // CLEAR WINDOWS
+                s++; // next byte is a bitmap of windows to clear
+            }
+            else if (*s == 0x89) {
+                // DISPLAY WINDOWS
+                s++; // next byte is a bitmap of windows to display
+            }
+            else if (*s == 0x8A) {
+                // HIDE WINDOWS
+                s++; // next byte is a bitmap of windows to hide
+            }
+            else if (*s == 0x8B) {
+                // TOGGLE WINDOWS
+                s++; // next byte is a bitmap of windows to toggle
+            }
+            else if (*s == 0x8C) {
+                // DELETE WINDOWS
+                s++; // next byte is a bitmap of windows to delete
+            }
+            else if (*s == 0x8E) {
+                // DELAY CANCEL
+            }
+            else if (*s == 0x8F) {
+                // RESET
+            }
+            else if (*s == 0x90) {
+                // SET PEN ATTRIBUTES
+                s += 2; // next two bytes are bitfields of pen size, offset, text/font/edge/underline/italics
+            }
+            else if (*s == 0x91) {
+                // SET PEN COLOR
+                s += 3; // next three bytes are 2-bit RGB encodings of foreground, background, edge colors
+            }
+            else if (*s == 0x92) {
+                // SET PEN LOCATION
+                s += 2; // next two bytes are pen position
+            }
+            else if (*s == 0x97) {
+                // SET WINDOW ATTRIBUTES
+                s += 4; // window attributes
+            }
+            else if (*s >= 0x98 && *s <= 0x9F) {
+                // DEFINE WINDOW
+                s += 7;
+            }
+        }
+        else if ((*s >= 0x20 && *s <= 0x7F) || *s >= 0xA0) {
+            // text (latin-1)
+            fputc(*s,stdout);
+            dtv708_xpos++;
+        }
+        else if (*s == 0x0C) {
+            // form feed
+            if (dtv708_xpos > 0) {
+                dtv708_xpos = 0;
+                fprintf(stdout,"\n");
+            }
+        }
+        else if (*s == 0x0D) {
+            // carriage return
+            if (dtv708_xpos > 0) {
+                dtv708_xpos = 0;
+                fprintf(stdout,"\n");
+            }
+        }
+
+        s++;
+    }
+}
+
+void on_708_packet_completion(void) {
+    if (dtv708_data_count >= 2) {
+        unsigned char *scan = dtv708_data;
+        unsigned char *fence = dtv708_data + dtv708_data_count;
+
+        unsigned char sequence_number = *scan >> 6;
+        unsigned char packet_size_code = *scan & 0x3F;
+
+        if (verbose)
+            fprintf(stderr,"DTV CC packet seq=%u packet_size_code=%u\n",
+                sequence_number,packet_size_code);
+
+        if ((packet_size_code*2) != dtv708_data_count)
+            fprintf(stderr,"DTV CC warning, packet_size_code does not match packet length\n");
+
+        if (dtv708_expect_seq >= 0) {
+            if (sequence_number != dtv708_expect_seq)
+                fprintf(stderr,"DTV CC warning, sequence discontinuity\n");
+        }
+        dtv708_expect_seq = (sequence_number + 1) & 3;
+
+        /* within the payload, parse service blocks.
+         * this is how DTV CC allows multiple "services" */
+        scan++;
+        while (scan < fence) {
+            unsigned char service_number,block_size;
+            unsigned char *sf;
+
+            if (*scan == 0x00) {
+                /* CEA-708-E sec 6.2.3 Null Service Block Header */
+                /* no more data */
+                break;
+            }
+
+            service_number = *scan >> 5;
+            block_size = *scan & 0x1F;
+            scan++;
+            sf = scan + block_size;
+
+            if (verbose)
+                fprintf(stderr,"DTV CC service block, service=%u blocksize=%u\n",
+                    service_number,block_size);
+
+            if (sf > fence) {
+                fprintf(stderr,"DTV CC warning, service block too long\n");
+                break;
+            }
+
+            if (service_number == 7 && block_size != 0)
+                fprintf(stderr,"DTV CC warning, extended services not supported by this code\n");
+            else if (service_number == choose_708_channel)
+                on_708_cc_data(scan,block_size);
+
+            scan = sf;
+        }
+    }
+
+    dtv708_data_count = 0;
+}
+
+void on_708_cc_packet(unsigned int ccword) {
+    if ((dtv708_data_count+2) <= sizeof(dtv708_data)) {
+        dtv708_data[dtv708_data_count++] = ccword >> 8;
+        dtv708_data[dtv708_data_count++] = ccword & 0xFF;
+    }
+    else {
+        fprintf(stderr,"WARNING: DTV CC caption packet overrun\n");
+    }
+}
+
 static int parse_argv(int argc,char **argv) {
 	const char *a;
 	int i;
@@ -244,7 +415,7 @@ static int parse_argv(int argc,char **argv) {
             }
             else if (!strcmp(a,"dtv")) {
                 choose_608_field = -1;
-                choose_708_channel = 0;
+                choose_708_channel = 1; // default channel 1
             }
             else if (!strcmp(a,"cc1")) {
                 choose_608_field = FIELD608_ODD;
@@ -346,12 +517,18 @@ bool do_video_decode_and_render(AVPacket &pkt) {
                     if (*scan >= 0xFE) {
                         // DTVCC CEA 708 data
                         if (verbose)
-                            printf("CEA-708 CC data 0x%02x%02x\n",scan[1],scan[2]);
+                            fprintf(stderr,"CEA-708 CC data 0x%02x%02x\n",scan[1],scan[2]);
+
+                        if (*scan == 0xFF) // start of a new packet, decode the previous one
+                            on_708_packet_completion();
+
+                        if (choose_708_channel >= 0)
+                            on_708_cc_packet(((unsigned int)scan[1] << 8) + (unsigned int)scan[2]);
                     }
                     else if (*scan >= 0xFC) {
                         // EIA-608 CC data
                         if (verbose) {
-                            printf("EIA-608 CC data field=%u(%s) 0x%02x%02x\n",
+                            fprintf(stderr,"EIA-608 CC data field=%u(%s) 0x%02x%02x\n",
                                 *scan & 1,(*scan & 1) ? "even" : "odd",scan[1],scan[2]);
                         }
 
