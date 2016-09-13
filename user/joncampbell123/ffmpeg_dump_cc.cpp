@@ -45,6 +45,45 @@ void sigma(int x) {
 	if (++DIE >= 20) abort();
 }
 
+enum {
+    FIELD608_ODD=0,
+    FIELD608_EVEN=1
+};
+
+enum {
+    CH608_NONE=-1,
+    CH608_CC1,
+    CH608_CC2,
+    CH608_CC3,
+    CH608_CC4,
+    CH608_TEXT1,
+    CH608_TEXT2,
+    CH608_TEXT3,
+    CH608_TEXT4,
+    CH608_XDS
+};
+
+const char *choose_608_channel_name(int n) {
+    switch (n) {
+        case CH608_CC1:     return "CC1";
+        case CH608_CC2:     return "CC2";
+        case CH608_CC3:     return "CC3";
+        case CH608_CC4:     return "CC4";
+        case CH608_TEXT1:   return "TEXT1";
+        case CH608_TEXT2:   return "TEXT2";
+        case CH608_TEXT3:   return "TEXT3";
+        case CH608_TEXT4:   return "TEXT4";
+        case CH608_XDS:     return "XDS";
+    };
+
+    return "";
+};
+
+int                     choose_608_field = -1;
+int                     choose_608_channel = -1;        // enum CH608_*
+int                     choose_708_channel = -1;
+bool                    verbose = false;
+
 int                     video_stream_index = 0;
 
 string                  input_file;
@@ -53,6 +92,131 @@ AVFormatContext*        input_avfmt = NULL;
 AVStream*               input_avstream_video = NULL;	// do not free
 AVCodecContext*         input_avstream_video_codec_context = NULL; // do not free
 AVFrame*                input_avstream_video_frame = NULL;
+
+enum {
+    MODE608_NONE=0,
+    MODE608_CC1,        // CC3 if second field
+    MODE608_CC2,        // CC4 if second field
+    MODE608_CC3,        // CC1 if first field
+    MODE608_CC4,        // CC2 if first field
+    MODE608_TEXT1,      // TEXT3 if second field
+    MODE608_TEXT2,      // TEXT4 if second field
+    MODE608_TEXT3,      // TEXT1 if first field
+    MODE608_TEXT4,      // TEXT2 if first field
+    MODE608_XDS         // CC3 XDS
+};
+
+static unsigned int     mode608 = MODE608_NONE;
+static unsigned int     mode608_xds_return = MODE608_NONE; // what to return to when XDS finishes
+
+static const char *mode608_str(void) {
+    switch (mode608) {
+        case MODE608_NONE:      return "(none)";
+        case MODE608_CC1:       return "CC1";
+        case MODE608_CC2:       return "CC2";
+        case MODE608_CC3:       return "CC3";
+        case MODE608_CC4:       return "CC4";
+        case MODE608_TEXT1:     return "TEXT1";
+        case MODE608_TEXT2:     return "TEXT2";
+        case MODE608_TEXT3:     return "TEXT3";
+        case MODE608_TEXT4:     return "TEXT4";
+        case MODE608_XDS:       return "XDS";
+    };
+
+    return "";
+}
+
+static void on_608_cc_mode_watch(unsigned int ccword,bool evenfield) {
+    if ((ccword&0x6000) != 0)
+        return; // plain text/data non-control
+
+    unsigned int pmode = mode608;
+
+    if (mode608 == MODE608_XDS && (ccword&0x7F00) == 0x0F00) {
+        // end of XDS packet
+        mode608 = mode608_xds_return;
+    }
+    else if ((ccword&0x7070) == 0 && (ccword&0x0F0F) != 0) {
+        // start of XDS packet. this is supposed to happen only on the even field
+        if (mode608 != MODE608_XDS) {
+            mode608_xds_return = mode608;
+            mode608 = MODE608_XDS;
+        }
+    }
+    else if (mode608 != MODE608_XDS) {
+        // control word. bit 11 determines whether it goes to CC1/CC3 or CC2/CC4
+        unsigned char cc2 = (ccword & 0x0800) ? 1 : 0;
+        ccword &= ~0x0800; // filter out bit 11
+
+        if (ccword == 0x1420/* Resume Caption Loading*/ ||
+            (ccword >= 0x1425 && ccword <= 0x1427)/* Roll-up caption mode*/ ||
+            ccword == 0x1429/* Resume Direct Captioning*/) {
+            mode608 = (cc2 ? MODE608_CC2 : MODE608_CC1) + (evenfield ? 2 : 0);
+        }
+        else if (ccword == 0x142B/* Resume Text Display */) {
+            mode608 = (cc2 ? MODE608_TEXT2 : MODE608_TEXT1) + (evenfield ? 2 : 0);
+        }
+    }
+
+    if (mode608 != pmode) {
+        if (verbose)
+            fprintf(stderr,"CC processing has switched to mode %s\n",mode608_str());
+    }
+}
+
+unsigned int cc_xpos = 0;
+
+static void on_608_cc(unsigned int ccword,bool evenfield) {
+    ccword &= 0x7F7F; /* strip parity bits */
+
+    if (ccword == 0) return;
+
+    if (verbose)
+        fprintf(stderr,"Processing CC word 0x%04x (%s field)\n",ccword,evenfield?"even":"odd");
+
+    on_608_cc_mode_watch(ccword,evenfield); // keep track of the decoder "mode" to make sure we pick out the right CC channel
+
+    /* don't pay attention to the data unless it's the CC channel we want */
+    if (choose_608_channel == CH608_CC1 && mode608 != MODE608_CC1)
+        return;
+    if (choose_608_channel == CH608_CC2 && mode608 != MODE608_CC2)
+        return;
+    if (choose_608_channel == CH608_CC3 && mode608 != MODE608_CC3)
+        return;
+    if (choose_608_channel == CH608_CC4 && mode608 != MODE608_CC4)
+        return;
+    if (choose_608_channel == CH608_TEXT1 && mode608 != MODE608_TEXT1)
+        return;
+    if (choose_608_channel == CH608_TEXT2 && mode608 != MODE608_TEXT2)
+        return;
+    if (choose_608_channel == CH608_TEXT3 && mode608 != MODE608_TEXT3)
+        return;
+    if (choose_608_channel == CH608_TEXT4 && mode608 != MODE608_TEXT4)
+        return;
+
+    if (verbose)
+        fprintf(stderr,"Demuxed CC word is 0x%04x\n",ccword);
+
+    // this is a very dumb simple decoder.
+    // it may make some text harder to read, but it's a proof of concept that works for now.
+    if ((ccword&0x6000) != 0) { // plain text
+        fputc(ccword>>8,stdout);
+        cc_xpos++;
+
+        if ((ccword&0xFF) != 0) {
+            fputc(ccword&0xFF,stdout);
+            cc_xpos++;
+        }
+
+        fflush(stdout);
+    }
+    else {
+        if (cc_xpos != 0) {
+            cc_xpos = 0;
+            fprintf(stdout,"\n");
+        }
+    }
+}
 
 static int parse_argv(int argc,char **argv) {
 	const char *a;
@@ -64,10 +228,61 @@ static int parse_argv(int argc,char **argv) {
 		if (*a == '-') {
 			do { a++; } while (*a == '-');
 
-			if (!strcmp(a,"i")) {
+            if (!strcmp(a,"v")) {
+                verbose = true;
+            }
+            else if (!strcmp(a,"i")) {
 				input_file = argv[i++];
 			}
-			else {
+            else if (!strcmp(a,"odd")) {
+                choose_608_field = 0;
+                choose_708_channel = -1;
+            }
+            else if (!strcmp(a,"even")) {
+                choose_608_field = 0;
+                choose_708_channel = -1;
+            }
+            else if (!strcmp(a,"dtv")) {
+                choose_608_field = -1;
+                choose_708_channel = 0;
+            }
+            else if (!strcmp(a,"cc1")) {
+                choose_608_field = FIELD608_ODD;
+                choose_608_channel = CH608_CC1;
+            }
+            else if (!strcmp(a,"cc2")) {
+                choose_608_field = FIELD608_ODD;
+                choose_608_channel = CH608_CC2;
+            }
+            else if (!strcmp(a,"cc3")) {
+                choose_608_field = FIELD608_EVEN;
+                choose_608_channel = CH608_CC3;
+            }
+            else if (!strcmp(a,"cc4")) {
+                choose_608_field = FIELD608_EVEN;
+                choose_608_channel = CH608_CC4;
+            }
+            else if (!strcmp(a,"text1")) {
+                choose_608_field = FIELD608_ODD;
+                choose_608_channel = CH608_TEXT1;
+            }
+            else if (!strcmp(a,"text2")) {
+                choose_608_field = FIELD608_ODD;
+                choose_608_channel = CH608_TEXT2;
+            }
+            else if (!strcmp(a,"text3")) {
+                choose_608_field = FIELD608_EVEN;
+                choose_608_channel = CH608_TEXT3;
+            }
+            else if (!strcmp(a,"text4")) {
+                choose_608_field = FIELD608_EVEN;
+                choose_608_channel = CH608_TEXT4;
+            }
+            else if (!strcmp(a,"xds")) {
+                choose_608_field = FIELD608_EVEN;
+                choose_608_channel = CH608_XDS;
+            }
+            else {
 				fprintf(stderr,"Unknown switch '%s'\n",a);
 				return 1;
 			}
@@ -82,6 +297,20 @@ static int parse_argv(int argc,char **argv) {
 		fprintf(stderr,"You must specify an input file (-i).\n");
 		return 1;
 	}
+
+    if (choose_608_field < 0 && choose_708_channel < 0) {
+        // default 608
+        choose_608_field = 0; // odd field, CC1/CC2, where most caption data resides
+    }
+    if (choose_608_channel < 0 && choose_608_field >= 0) {
+        if (choose_608_field == 0)
+            choose_608_channel = CH608_CC1;
+        if (choose_608_field == 1)
+            choose_608_channel = CH608_CC3;
+    }
+
+    printf("EIA-608: decoding field=%d channel=%s\n",
+        choose_608_field,choose_608_channel_name(choose_608_channel));
 
 	return 0;
 }
@@ -100,7 +329,9 @@ bool do_video_decode_and_render(AVPacket &pkt) {
             unsigned int packets = a53->size / 3;
             const unsigned char *scan = a53->data;
 
-            fprintf(stderr,"Caption data (%u bytes)\n",a53->size);
+            if (verbose)
+                fprintf(stderr,"Caption data (%u bytes)\n",a53->size);
+
             if (a53->size % 3)
                 fprintf(stderr,"A53 caption data warning, %u extra bytes\n",a53->size % 3);
 
@@ -114,12 +345,18 @@ bool do_video_decode_and_render(AVPacket &pkt) {
                 if (*scan >= 0xF8) {
                     if (*scan >= 0xFE) {
                         // DTVCC CEA 708 data
-                        printf("CEA-708 CC data 0x%02x%02x\n",scan[1],scan[2]);
+                        if (verbose)
+                            printf("CEA-708 CC data 0x%02x%02x\n",scan[1],scan[2]);
                     }
                     else if (*scan >= 0xFC) {
                         // EIA-608 CC data
-                        printf("EIA-608 CC data field=%u(%s) 0x%02x%02x\n",
-                            *scan & 1,(*scan & 1) ? "even" : "odd",scan[1],scan[2]);
+                        if (verbose) {
+                            printf("EIA-608 CC data field=%u(%s) 0x%02x%02x\n",
+                                *scan & 1,(*scan & 1) ? "even" : "odd",scan[1],scan[2]);
+                        }
+
+                        if (choose_608_field == (*scan & 1) ? FIELD608_EVEN : FIELD608_ODD)
+                            on_608_cc(((unsigned int)scan[1] << 8) + (unsigned int)scan[2],(*scan & 1)!=0/*even field*/);
                     }
                 }
                 else {
