@@ -291,8 +291,8 @@ void on_708_cc_data(unsigned char *s,unsigned int block_size) {
                 s += 4; // window attributes
             }
             else if (*s >= 0x98 && *s <= 0x9F) {
-                // DEFINE WINDOW
-                s += 7;
+                // DEFINE WINDOW. The first command byte bits 2:0 are the window ID
+                s += 6;
             }
         }
         else if ((*s >= 0x20 && *s <= 0x7F) || *s >= 0xA0) {
