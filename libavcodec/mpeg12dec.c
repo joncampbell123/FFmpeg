@@ -2265,7 +2265,6 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
         /* extract DVD CC data
          *
          * uint32_t   user_data_start_code        0x000001B2    (big endian)
-         * -------------------- p[0] starts here ---------------------
          * uint16_t   user_identifier             0x4343 "CC"
          * uint8_t    user_data_type_code         0x01
          * uint8_t    caption_block_size          0xF8
@@ -2274,7 +2273,7 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
          *   bit 6    caption_filler              0
          *   bit 5:1  caption_block_count         number of caption blocks (pairs of caption words = frames). Most DVDs use 15 per start of GOP.
          *   bit 0    caption_extra_field_added   1=one additional caption word
-         * -------------------- p[5] starts here ---------------------
+         *
          * struct caption_field_block {
          *   uint8_t
          *     bit 7:1 caption_filler             0x7F (all 1s)
@@ -2288,8 +2287,7 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
          * Don't assume that the first caption word is the odd field. There do exist MPEG files in the wild that start
          * on the even field. There also exist DVDs in the wild that encode an odd field count and the
          * caption_extra_field_added/caption_odd_field_first bits change per packet to allow that. */
-        int caption_block_count = p[4] & 0x3F; /* you can treat bits 5:0 as number of fields */
-        int cc_count = 0; /* number of caption fields */
+        int cc_count = 0;
         int i;
 
         for (i = 5; cc_count < caption_block_count && (i + 3) <= buf_size; i += 3) {
