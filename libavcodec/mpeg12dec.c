@@ -2294,7 +2294,7 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
 
         for (i = 5; cc_count < caption_block_count && (i + 3) <= buf_size; i += 3) {
             if ((p[i] & 0xfe) != 0xfe) {
-                av_log(avctx, AV_LOG_DEBUG, "cc_count is too large (%u > %u) or junk data in DVD caption packet",(unsigned int)caption_block_count,(unsigned int)cc_count);
+                av_log(avctx, AV_LOG_DEBUG, "cc_count is too large (%d > %d) or junk data in DVD caption packet\n",caption_block_count,cc_count);
                 break;
             }
 
@@ -2313,8 +2313,8 @@ static int mpeg_decode_a53_cc(AVCodecContext *avctx,
 
                 p += 5;
                 for (i = 0; i < cc_count; i++) {
-                    /* if the source actually uses the caption_odd_field bit, then use that to determine the field.
-                     * else, toggle between fields to keep track for DVDs where p[0] == 0xFF at all times. */
+                    /* If the source actually uses the caption_odd_field bit, then use that to determine the field.
+                     * Else, toggle between fields to keep track for DVDs where p[0] == 0xFF at all times. */
                     if (p[0] != pfield)
                         field1 = p[0] & 1; /* caption_field_odd */
 
