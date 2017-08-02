@@ -85,7 +85,7 @@ JNIEnv *ff_jni_get_env(void *log_ctx)
         av_log(log_ctx, AV_LOG_ERROR, "The specified JNI version is not supported\n");
         break;
     default:
-        av_log(log_ctx, AV_LOG_ERROR, "Failed to get the JNI environment attached to this thread");
+        av_log(log_ctx, AV_LOG_ERROR, "Failed to get the JNI environment attached to this thread\n");
         break;
     }
 
@@ -224,7 +224,7 @@ int ff_jni_exception_get_summary(JNIEnv *env, jthrowable exception, char **error
     } else if (!name && message) {
         av_bprintf(&bp, "Exception: %s", message);
     } else {
-        av_log(log_ctx, AV_LOG_WARNING, "Could not retreive exception name and message\n");
+        av_log(log_ctx, AV_LOG_WARNING, "Could not retrieve exception name and message\n");
         av_bprintf(&bp, "Exception occurred");
     }
 
@@ -303,6 +303,11 @@ int ff_jni_init_jfields(JNIEnv *env, void *jfields, const struct FFJniField *jfi
 
             last_clazz = *(jclass*)((uint8_t*)jfields + jfields_mapping[i].offset) =
                     global ? (*env)->NewGlobalRef(env, clazz) : clazz;
+
+            if (global) {
+                (*env)->DeleteLocalRef(env, clazz);
+            }
+
         } else {
 
             if (!last_clazz) {

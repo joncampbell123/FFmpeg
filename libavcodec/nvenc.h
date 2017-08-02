@@ -23,30 +23,15 @@
 
 #include "config.h"
 
+#include "compat/cuda/dynlink_loader.h"
 #include "libavutil/fifo.h"
 #include "libavutil/opt.h"
 
 #include "avcodec.h"
 
-#if CONFIG_CUDA
-#include "libavutil/hwcontext_cuda.h"
-#else
-
-#if defined(_WIN32)
-#define CUDAAPI __stdcall
-#else
-#define CUDAAPI
-#endif
-
-typedef enum cudaError_enum {
-    CUDA_SUCCESS = 0
-} CUresult;
-typedef int CUdevice;
-typedef void* CUcontext;
-typedef void* CUdeviceptr;
-#endif
-
 #define MAX_REGISTERED_FRAMES 64
+#define RC_MODE_DEPRECATED 0x800000
+#define RCD(rc_mode) ((rc_mode) | RC_MODE_DEPRECATED)
 
 typedef struct NvencSurface
 {
@@ -61,36 +46,12 @@ typedef struct NvencSurface
     NV_ENC_OUTPUT_PTR output_surface;
     NV_ENC_BUFFER_FORMAT format;
     int size;
-    int lockCount;
 } NvencSurface;
-
-typedef CUresult(CUDAAPI *PCUINIT)(unsigned int Flags);
-typedef CUresult(CUDAAPI *PCUDEVICEGETCOUNT)(int *count);
-typedef CUresult(CUDAAPI *PCUDEVICEGET)(CUdevice *device, int ordinal);
-typedef CUresult(CUDAAPI *PCUDEVICEGETNAME)(char *name, int len, CUdevice dev);
-typedef CUresult(CUDAAPI *PCUDEVICECOMPUTECAPABILITY)(int *major, int *minor, CUdevice dev);
-typedef CUresult(CUDAAPI *PCUCTXCREATE)(CUcontext *pctx, unsigned int flags, CUdevice dev);
-typedef CUresult(CUDAAPI *PCUCTXPOPCURRENT)(CUcontext *pctx);
-typedef CUresult(CUDAAPI *PCUCTXDESTROY)(CUcontext ctx);
-
-typedef NVENCSTATUS (NVENCAPI *PNVENCODEAPIGETMAXSUPPORTEDVERSION)(uint32_t* version);
-typedef NVENCSTATUS (NVENCAPI *PNVENCODEAPICREATEINSTANCE)(NV_ENCODE_API_FUNCTION_LIST *functionList);
 
 typedef struct NvencDynLoadFunctions
 {
-#if !CONFIG_CUDA
-    void *cuda;
-#endif
-    void *nvenc;
-
-    PCUINIT cu_init;
-    PCUDEVICEGETCOUNT cu_device_get_count;
-    PCUDEVICEGET cu_device_get;
-    PCUDEVICEGETNAME cu_device_get_name;
-    PCUDEVICECOMPUTECAPABILITY cu_device_compute_capability;
-    PCUCTXCREATE cu_ctx_create;
-    PCUCTXPOPCURRENT cu_ctx_pop_current;
-    PCUCTXDESTROY cu_ctx_destroy;
+    CudaFunctions *cuda_dl;
+    NvencFunctions *nvenc_dl;
 
     NV_ENCODE_API_FUNCTION_LIST nvenc_funcs;
     int nvenc_device_count;
@@ -121,6 +82,7 @@ enum {
 enum {
     NV_ENC_HEVC_PROFILE_MAIN,
     NV_ENC_HEVC_PROFILE_MAIN_10,
+    NV_ENC_HEVC_PROFILE_REXT,
 };
 
 enum {
@@ -149,6 +111,7 @@ typedef struct NvencContext
     int nb_surfaces;
     NvencSurface *surfaces;
 
+    AVFifoBuffer *unused_surface_queue;
     AVFifoBuffer *output_surface_queue;
     AVFifoBuffer *output_surface_ready_queue;
     AVFifoBuffer *timestamp_list;
@@ -182,6 +145,23 @@ typedef struct NvencContext
     int flags;
     int async_depth;
     int rc_lookahead;
+    int aq;
+    int no_scenecut;
+    int forced_idr;
+    int b_adapt;
+    int temporal_aq;
+    int zerolatency;
+    int nonref_p;
+    int strict_gop;
+    int aq_strength;
+    float quality;
+    int aud;
+    int bluray_compat;
+    int init_qp_p;
+    int init_qp_b;
+    int init_qp_i;
+    int cqp;
+    int weighted_pred;
 } NvencContext;
 
 int ff_nvenc_encode_init(AVCodecContext *avctx);
